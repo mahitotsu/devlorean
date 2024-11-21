@@ -1,5 +1,6 @@
 import { Stack, StackProps } from "aws-cdk-lib";
 import { IpAddresses, SubnetType, Vpc } from "aws-cdk-lib/aws-ec2";
+import { ApplicationLoadBalancer, IApplicationLoadBalancer } from "aws-cdk-lib/aws-elasticloadbalancingv2";
 import { Construct } from "constructs";
 
 interface VpcStackProps extends StackProps {
@@ -7,17 +8,30 @@ interface VpcStackProps extends StackProps {
 }
 
 export class VpcStack extends Stack {
+
     constructor(scope: Construct, id: string, props: VpcStackProps) {
         super(scope, id, props);
 
         const vpc = new Vpc(this, 'Vpc', {
             ipAddresses: IpAddresses.cidr(props.vpcCidr),
-            subnetConfiguration: [
-                { subnetType: SubnetType.PUBLIC, name: 'Public', cidrMask: 20, },
-                { subnetType: SubnetType.PRIVATE_WITH_EGRESS, name: 'Private', cidrMask: 18, },
-            ],
             createInternetGateway: true,
-            natGatewaySubnets: { subnetType: SubnetType.PUBLIC }
+            subnetConfiguration: [
+                { subnetType: SubnetType.PRIVATE_WITH_EGRESS, cidrMask: 18, name: 'Private' },
+                { subnetType: SubnetType.PUBLIC, cidrMask: 20, name: 'Public' },
+            ],
+            natGatewaySubnets: { subnetType: SubnetType.PUBLIC },
+            restrictDefaultSecurityGroup: false,
         });
+
+        const alb = new ApplicationLoadBalancer(vpc, 'Endpoint', {
+            vpc,
+            vpcSubnets: { subnetType: SubnetType.PRIVATE_WITH_EGRESS },
+            internetFacing: false,
+        });
+        this._endpoint = alb;
     }
+
+    private _endpoint: IApplicationLoadBalancer;
+
+    get endpoint() { return this._endpoint; }
 }
