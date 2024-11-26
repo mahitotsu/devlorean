@@ -1,5 +1,5 @@
 import { Stack, StackProps } from "aws-cdk-lib";
-import { IApplicationLoadBalancer } from "aws-cdk-lib/aws-elasticloadbalancingv2";
+import { ApplicationLoadBalancer, IApplicationLoadBalancer } from "aws-cdk-lib/aws-elasticloadbalancingv2";
 import { Accelerator } from "aws-cdk-lib/aws-globalaccelerator";
 import { ApplicationLoadBalancerEndpoint } from "aws-cdk-lib/aws-globalaccelerator-endpoints";
 import { Construct } from "constructs";
@@ -18,7 +18,11 @@ export class GlobalNetworkStack extends Stack {
         const listener = globalEndpoint.addListener('Listener', { portRanges: [{ fromPort: props.listenerPort },] });
 
         props.loadBalancers
-            .map((loadBalancer, index) => new ApplicationLoadBalancerEndpoint(loadBalancer))
+            .map((loadBalancer, index) => ApplicationLoadBalancer.fromApplicationLoadBalancerAttributes(this, `LoadBalancer${index}`, {
+                loadBalancerArn: loadBalancer.loadBalancerArn,
+                securityGroupId: loadBalancer.connections.securityGroups[0].securityGroupId,
+            }))
+            .map((loadBalancer) => new ApplicationLoadBalancerEndpoint(loadBalancer))
             .forEach((endpoint, index) => listener.addEndpointGroup(`Endpoint${index}`, { endpoints: [endpoint] }));
     }
 }
