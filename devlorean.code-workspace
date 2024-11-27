@@ -2,12 +2,6 @@
 	"folders": [
 		{
 			"path": "."
-		},
-		{
-			"path": "devlorean-aws"
-		},
-		{
-			"path": "devlorean-web"
 		}
 	],
 	"settings": {
