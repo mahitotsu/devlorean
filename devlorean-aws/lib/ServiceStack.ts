@@ -86,7 +86,8 @@ export class ServiceStack extends Stack {
                     unhealthyThresholdCount: 2,
                     interval: Duration.seconds(10),
                     timeout: Duration.seconds(3),
-                }
+                },
+                deregistrationDelay: Duration.seconds(0),
             })],
         });
     }
