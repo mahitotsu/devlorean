@@ -1,5 +1,5 @@
 import { Duration, Stack, StackProps } from "aws-cdk-lib";
-import { Peer, Port, SubnetType } from "aws-cdk-lib/aws-ec2";
+import { IVpc, SubnetType, Vpc } from "aws-cdk-lib/aws-ec2";
 import { Cluster, ContainerImage, CpuArchitecture, FargateService, FargateTaskDefinition } from "aws-cdk-lib/aws-ecs";
 import { ApplicationLoadBalancer, ApplicationProtocol, ApplicationTargetGroup, IApplicationLoadBalancer, ListenerCondition, TargetType } from "aws-cdk-lib/aws-elasticloadbalancingv2";
 import { LambdaTarget } from "aws-cdk-lib/aws-elasticloadbalancingv2-targets";
@@ -8,29 +8,37 @@ import { NodejsFunction } from "aws-cdk-lib/aws-lambda-nodejs";
 import { Construct } from "constructs";
 
 interface ServiceStackProps extends StackProps {
-    loadBalancer: IApplicationLoadBalancer;
-    listenerPort: number;
-    protocol: ApplicationProtocol;
+    vpc: IVpc;
 }
 
 export class ServiceStack extends Stack {
     constructor(scope: Construct, id: string, props: ServiceStackProps) {
         super(scope, id, props);
 
-        const loadBalancer = ApplicationLoadBalancer.fromApplicationLoadBalancerAttributes(this, 'LoadBalancer', {
-            loadBalancerArn: props.loadBalancer.loadBalancerArn,
-            securityGroupId: props.loadBalancer.connections.securityGroups[0].securityGroupId,
-            vpc: props.loadBalancer.vpc,
+        const privateSubnets = props.vpc.selectSubnets({ subnetType: SubnetType.PRIVATE_WITH_EGRESS }).subnets;
+        const vpc = Vpc.fromVpcAttributes(this, 'Vpc', {
+            vpcId: props.vpc.vpcId,
+            availabilityZones: props.vpc.availabilityZones,
+            privateSubnetIds: privateSubnets.map(subnet => subnet.subnetId),
+            privateSubnetRouteTableIds: privateSubnets.map(subnet => subnet.routeTable.routeTableId),
         });
-        const cluster = new Cluster(this, 'ServiceCluster', { vpc: loadBalancer.vpc, });
+        const loadBalancer = new ApplicationLoadBalancer(vpc, 'Endpoint', {
+            vpc,
+            vpcSubnets: { subnetType: SubnetType.PRIVATE_WITH_EGRESS },
+            internetFacing: false,
+        });
 
+        const cluster = new Cluster(this, 'ServiceCluster', { vpc, });
         const serviceHealthCheck = new NodejsFunction(this, 'ServiceHealthCheck', {
             runtime: Runtime.NODEJS_20_X,
             architecture: Architecture.ARM_64,
             entry: `${__dirname}/functions/ServiceHealthCheck.ts`,
         });
 
+        const listenerPort = 80;
         const containerPort = 3000;
+        const protocol = ApplicationProtocol.HTTP;
+
         const serviceWebTaskDefinition = new FargateTaskDefinition(this, 'ServiceWebTaskDefintiion', {
             cpu: 512, memoryLimitMiB: 1024,
             runtimePlatform: { cpuArchitecture: CpuArchitecture.X86_64 },
@@ -47,13 +55,9 @@ export class ServiceStack extends Stack {
             desiredCount: 1,
             vpcSubnets: { subnetType: SubnetType.PRIVATE_WITH_EGRESS },
         });
-        cluster.vpc.selectSubnets({ subnetType: SubnetType.PRIVATE_WITH_EGRESS }).subnets.forEach(subnet => {
-            loadBalancer.connections.allowTo(Peer.ipv4(subnet.ipv4CidrBlock), Port.tcp(containerPort));
-        });
 
         const listener = loadBalancer.addListener('Listener', {
-            port: props.listenerPort,
-            protocol: props.protocol,
+            port: listenerPort, protocol,
             defaultTargetGroups: [new ApplicationTargetGroup(serviceHealthCheck, 'TargetGroup', {
                 targetType: TargetType.LAMBDA,
                 targets: [new LambdaTarget(serviceHealthCheck)],
@@ -74,9 +78,8 @@ export class ServiceStack extends Stack {
             ],
             targetGroups: [new ApplicationTargetGroup(serviceWeb, 'TargetGroup', {
                 targetType: TargetType.IP,
-                vpc: cluster.vpc,
-                port: serviceWebContainer.portMappings[0].containerPort,
-                protocol: ApplicationProtocol.HTTP,
+                vpc,
+                port: containerPort, protocol,
                 targets: [serviceWeb],
                 healthCheck: {
                     enabled: true,
@@ -90,5 +93,11 @@ export class ServiceStack extends Stack {
                 deregistrationDelay: Duration.seconds(0),
             })],
         });
+
+        this._endpoint = loadBalancer;
     }
+
+    private _endpoint: IApplicationLoadBalancer;
+
+    get endpoint() { return this._endpoint; }
 }

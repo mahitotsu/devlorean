@@ -1,6 +1,5 @@
 #!/usr/bin/env node
 import { App, Environment } from 'aws-cdk-lib';
-import { ApplicationProtocol } from 'aws-cdk-lib/aws-elasticloadbalancingv2';
 import 'source-map-support/register';
 import { GlobalNetworkStack } from '../lib/GlobalNetworkStack';
 import { ServiceStack } from '../lib/ServiceStack';
@@ -42,24 +41,21 @@ const kixVpc = new VpcStack(app, 'KixVpcStack', {
   vpcCidr: kixConfig.vpcCidr,
   crossRegionReferences: true
 });
-new GlobalNetworkStack(app, 'GlobalNetworkStack', {
-  env: { account, region: 'us-east-1' },
-  loadBalancers: [hndVpc.endpoint, kixVpc.endpoint],
-  listenerPort: commonConfig.listenerPort,
-  crossRegionReferences: true,
-});
 
 const hndService = new ServiceStack(app, 'HndServiceStack', {
   env: hndConfig.env,
-  loadBalancer: hndVpc.endpoint,
-  listenerPort: commonConfig.listenerPort,
-  protocol: ApplicationProtocol.HTTP,
+  vpc: hndVpc.vpc,
   crossRegionReferences: true,
 });
 const kixService = new ServiceStack(app, 'KixServiceStack', {
   env: kixConfig.env,
-  loadBalancer: kixVpc.endpoint,
+  vpc: kixVpc.vpc,
+  crossRegionReferences: true,
+});
+
+new GlobalNetworkStack(app, 'GlobalNetworkStack', {
+  env: { account, region: 'us-east-1' },
+  loadBalancers: [hndService.endpoint, kixService.endpoint],
   listenerPort: commonConfig.listenerPort,
-  protocol: ApplicationProtocol.HTTP,
   crossRegionReferences: true,
 });

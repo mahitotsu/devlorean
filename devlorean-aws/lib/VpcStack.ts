@@ -1,6 +1,5 @@
 import { Stack, StackProps } from "aws-cdk-lib";
-import { IpAddresses, SubnetType, Vpc } from "aws-cdk-lib/aws-ec2";
-import { ApplicationLoadBalancer, IApplicationLoadBalancer } from "aws-cdk-lib/aws-elasticloadbalancingv2";
+import { IpAddresses, IVpc, SubnetType, Vpc } from "aws-cdk-lib/aws-ec2";
 import { Construct } from "constructs";
 
 interface VpcStackProps extends StackProps {
@@ -23,15 +22,10 @@ export class VpcStack extends Stack {
             restrictDefaultSecurityGroup: false,
         });
 
-        const alb = new ApplicationLoadBalancer(vpc, 'Endpoint', {
-            vpc,
-            vpcSubnets: { subnetType: SubnetType.PRIVATE_WITH_EGRESS },
-            internetFacing: false,
-        });
-        this._endpoint = alb;
+        this._vpc = vpc;
     }
 
-    private _endpoint: IApplicationLoadBalancer;
+    private _vpc: IVpc;
 
-    get endpoint() { return this._endpoint; }
+    get vpc() { return this._vpc; }
 }
