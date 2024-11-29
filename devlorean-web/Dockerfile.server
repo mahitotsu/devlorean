@@ -1,0 +1,7 @@
+FROM public.ecr.aws/docker/library/node:current-bullseye-slim
+
+COPY ./.output/server/ /server
+
+EXPOSE 3000
+ENTRYPOINT [ "node" ]
+CMD [ "/server/index.mjs" ]

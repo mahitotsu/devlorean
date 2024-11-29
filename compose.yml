@@ -1,0 +1,14 @@
+services:
+  web-gateway:
+    build:
+      context: ./devlorean-gw
+    ports:
+      - 8080:8080
+  web-server:
+    build:
+      context: ./devlorean-web
+      dockerfile: Dockerfile.server
+  web-public:
+    build:
+      context: ./devlorean-web
+      dockerfile: Dockerfile.public

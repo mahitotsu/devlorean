@@ -2,7 +2,13 @@
 	"folders": [
 		{
 			"path": "."
-		}
+		},
+		{
+			"path": "devlorean-gw"
+		},
+		{
+			"path": "devlorean-web"
+		},
 	],
 	"settings": {
 		"files.exclude": {
