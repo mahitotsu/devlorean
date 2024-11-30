@@ -1,6 +1,5 @@
-FROM public.ecr.aws/docker/library/node:current-bullseye-slim
+FROM public.ecr.aws/docker/library/node:alpine3.20
 
-RUN apt-get update -y && apt-get install -y curl
 COPY ./.output/server/ /server
 
 EXPOSE 3000

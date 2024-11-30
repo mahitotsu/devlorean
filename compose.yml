@@ -9,7 +9,7 @@ services:
       - 8080:8080
     healthcheck:
       test: ["CMD", "curl", "-f", "http://localhost:9901/ready"]
-      interval: 1m
+      interval: 10s
       timeout: 5s
       retries: 5
       start_period: 10s
@@ -17,9 +17,11 @@ services:
     build:
       context: ./devlorean-web
       dockerfile: Dockerfile.server
+    environment:
+      - NUXT_BACKEND_BASEURL=http://api.spring:8080
     healthcheck:
-      test: ["CMD", "curl", "-f", "http://localhost:3000/health"]
-      interval: 1m
+      test: ["CMD", "nc", "-z", "localhost", "3000"]
+      interval: 10s
       timeout: 5s
       retries: 5
       start_period: 10s
@@ -28,8 +30,18 @@ services:
       context: ./devlorean-web
       dockerfile: Dockerfile.public
     healthcheck:
-      test: ["CMD", "curl", "-f", "http://localhost:80/"]
+      test: ["CMD", "nc", "-z", "localhost", "80"]
       interval: 1m
       timeout: 5s
       retries: 5
       start_period: 10s
+  api.spring:
+    build:
+      context: ./devlorean-api
+    healthcheck:
+      test: ["CMD", "nc", "-z", "localhost", "8080"]
+      interval: 10s
+      timeout: 5s
+      retries: 5
+      start_period: 10s
+    
