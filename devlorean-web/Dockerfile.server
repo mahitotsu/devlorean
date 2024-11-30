@@ -1,5 +1,6 @@
 FROM public.ecr.aws/docker/library/node:current-bullseye-slim
 
+RUN apt-get update -y && apt-get install -y curl
 COPY ./.output/server/ /server
 
 EXPOSE 3000

@@ -1,5 +1,6 @@
 FROM public.ecr.aws/docker/library/nginx:mainline-alpine3.20-slim
 
+RUN apk --no-cache add curl
 COPY ./.output/public/ /usr/share/nginx/html/
 
 EXPOSE 80
