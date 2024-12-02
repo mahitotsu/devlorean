@@ -99,6 +99,7 @@ export class DevloreanStack extends Stack {
                 logDriver: LogDriver.awsLogs({ streamPrefix: 'gateway-traffic' }),
             }
         });
+        staticContents.grantRead(gatewayService.taskDefinition.taskRole);
         const gatewayTargetGroup = new NetworkTargetGroup(gatewayTaskDefinition, 'TargetGroup', {
             port: 8080, protocol: Protocol.TCP,
             targets: [gatewayService],
