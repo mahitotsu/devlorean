@@ -9,6 +9,9 @@
 		{
 			"path": "devlorean-web"
 		},
+		{
+			"path": "devlorean-api"
+		}
 	],
 	"settings": {
 		"files.exclude": {
