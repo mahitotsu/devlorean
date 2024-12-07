@@ -5,4 +5,4 @@ management:
   endpoints:
     web:
       exposure:
-        include: ['info', 'web']
+        include: ['info', 'health']
