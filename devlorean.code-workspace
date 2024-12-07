@@ -11,6 +11,9 @@
 		},
 		{
 			"path": "devlorean-api"
+		},
+		{
+			"path": "devlorean-sgw"
 		}
 	],
 	"settings": {
