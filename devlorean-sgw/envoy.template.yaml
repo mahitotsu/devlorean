@@ -23,7 +23,7 @@ static_resources:
               routes:
               - match: { prefix: "/api/health" }
                 redirect: { path_redirect: "/", response_code: MOVED_PERMANENTLY }
-              - match: { safe_regex: { google_re2: {}, regex: ".*\\.[^/]+$" } }
+              - match: { safe_regex: { regex: ".*\\.[^/]+$" } }
                 route:
                   cluster: cds_cluster
                   host_rewrite_literal: ${CDS_HOST}

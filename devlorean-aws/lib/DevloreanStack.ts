@@ -1,5 +1,5 @@
 import { CfnOutput, Duration, RemovalPolicy, Stack, StackProps } from "aws-cdk-lib";
-import { GatewayVpcEndpointAwsService, IpAddresses, IpProtocol, Port, SecurityGroup, SubnetType, Vpc } from "aws-cdk-lib/aws-ec2";
+import { IpAddresses, IpProtocol, Port, SecurityGroup, SubnetType, Vpc } from "aws-cdk-lib/aws-ec2";
 import { CfnService, Cluster, ContainerImage, FargateService, FargateTaskDefinition, HealthCheck, ICluster, LogDriver, Protocol } from "aws-cdk-lib/aws-ecs";
 import { NetworkListenerAction, NetworkLoadBalancer, NetworkTargetGroup, TargetType } from "aws-cdk-lib/aws-elasticloadbalancingv2";
 import { Effect, PolicyStatement } from "aws-cdk-lib/aws-iam";
@@ -16,7 +16,7 @@ export class DevloreanStack extends Stack {
         const vpc = new Vpc(this, 'Vpc', {
             maxAzs: 2, createInternetGateway: true, natGateways: 2,
             ipProtocol: IpProtocol.IPV4_ONLY,
-            ipAddresses: IpAddresses.cidr('10.0.0.0/24'), 
+            ipAddresses: IpAddresses.cidr('10.0.0.0/24'),
             subnetConfiguration: [{
                 name: 'Public', subnetType: SubnetType.PUBLIC, cidrMask: 27,
             }, {
@@ -25,16 +25,13 @@ export class DevloreanStack extends Stack {
                 name: 'Isolated', subnetType: SubnetType.PRIVATE_ISOLATED, cidrMask: 27,
             }]
         });
-        vpc.addGatewayEndpoint('s3Vpce', {
-            service: GatewayVpcEndpointAwsService.S3,
-            subnets: [{ subnetType: SubnetType.PRIVATE_WITH_EGRESS }],
-        });
 
         const contents = new Bucket(this, 'ContentsBucket', {
             removalPolicy: RemovalPolicy.DESTROY,
             autoDeleteObjects: true,
             blockPublicAccess: BlockPublicAccess.BLOCK_ALL,
             publicReadAccess: false,
+            websiteIndexDocument: 'index.html',
         });
         new BucketDeployment(contents, 'Deployer', {
             destinationBucket: contents,
@@ -84,8 +81,8 @@ export class DevloreanStack extends Stack {
             cluster, desiredCount: 1, containerPort: 10000,
             cpu: 256, memory: 1024,
             environment: {
-                CDS_HOST: contents.bucketDomainName,
-                CDS_PORT: '443',
+                CDS_HOST: contents.bucketWebsiteUrl,
+                CDS_PORT: '80',
                 WEB_HOST: `web.${serviceNamespace}`,
                 WEB_PORT: '3000'
             },
@@ -130,9 +127,13 @@ export class DevloreanStack extends Stack {
         contents.grantRead(sgwService.taskDefinition.taskRole);
         contents.addToResourcePolicy(new PolicyStatement({
             effect: Effect.ALLOW,
-            principals: [sgwService.taskDefinition.taskRole],
             actions: ['s3:GetObject'],
             resources: [contents.arnForObjects('*')],
+            conditions: {
+                'StringEquals': {
+                    'aws:SourceVpc': vpc.vpcId,
+                }
+            }
         }));
 
         new CfnOutput(this, 'DevloreanEndpoint', { value: `http://${nlb.loadBalancerDnsName}/` });
