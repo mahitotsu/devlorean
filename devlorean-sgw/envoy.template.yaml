@@ -38,8 +38,8 @@ static_resources:
 
   clusters:
   - name: cds_cluster
-    connect_timeout: 0.25s
-    type: LOGICAL_DNS
+    connect_timeout: 1s 
+    type: STRICT_DNS 
     lb_policy: MAGLEV
     load_assignment:
       cluster_name: cds_cluster
@@ -49,8 +49,8 @@ static_resources:
             address:
               socket_address: { address: ${CDS_HOST}, port_value: ${CDS_PORT} }
   - name: web_cluster
-    connect_timeout: 0.25s
-    type: LOGICAL_DNS
+    connect_timeout: 1s
+    type: STRICT_DNS
     lb_policy: MAGLEV
     load_assignment:
       cluster_name: web_cluster
