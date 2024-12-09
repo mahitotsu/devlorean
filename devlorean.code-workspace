@@ -4,15 +4,6 @@
 			"path": "."
 		},
 		{
-			"path": "devlorean-aws"
-		},
-		{
-			"path": "devlorean-web"
-		},
-		{
-			"path": "devlorean-api"
-		},
-		{
 			"path": "devlorean-sgw"
 		}
 	],

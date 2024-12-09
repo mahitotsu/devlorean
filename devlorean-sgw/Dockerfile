@@ -1,10 +1,7 @@
-FROM envoyproxy/envoy:v1.32-latest
+FROM envoyproxy/envoy:v1.32.2
 
-RUN apt-get update -y && apt-get install -y curl gettext-base
-
-COPY entrypoint.sh /entrypoint.sh
-RUN chmod +x /entrypoint.sh
-COPY ./envoy.template.yaml /etc/envoy/envoy.template.yaml
+WORKDIR /workdir
+COPY ./envoy.yaml /etc/envoy/envoy.yaml
 
 EXPOSE 10000
-ENTRYPOINT [ "/entrypoint.sh" ]
+CMD ["envoy", "-c", "/etc/envoy/envoy.yaml", "-l", "debug"]
