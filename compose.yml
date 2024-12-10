@@ -4,3 +4,6 @@ services:
       context: ./devlorean-sgw
     ports:
       - 80:10000
+    environment:
+      - BUCKET_NAME=hdkregionalwebstack-contentsbucket571b0902-nrdnfuucj9sj
+      - AWS_REGION=ap-northeast-1

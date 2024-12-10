@@ -1,3 +1,11 @@
+layered_runtime:
+  layers:
+    - name: static_layer
+      static_layer:
+        envoy:
+          reloadable_features:
+            explicit_internal_address_config: true
+
 static_resources:
   listeners:
   - name: listener_0
@@ -18,12 +26,13 @@ static_resources:
               - match:
                   prefix: "/"
                 route:
-                  host_rewrite_literal: 346929044083-bucket
+                  host_rewrite_literal: ${BUCKET_NAME}
                   cluster: contents_bucket
           http_filters:
           - name: envoy.filters.http.router
             typed_config:
               "@type": type.googleapis.com/envoy.extensions.filters.http.router.v3.Router
+
   clusters:
   - name: contents_bucket
     connect_timeout: 0.25s
@@ -36,9 +45,9 @@ static_resources:
       - lb_endpoints:
         - endpoint:
             address:
-              socket_address: { address: 346929044083-bucket.s3.ap-northeast-1.amazonaws.com, port_value: 443 }
+              socket_address: { address: ${BUCKET_NAME}.s3.${AWS_REGION}.amazonaws.com, port_value: 443 }
     transport_socket:
       name: envoy.transport_sockets.tls
       typed_config:
         "@type": type.googleapis.com/envoy.extensions.transport_sockets.tls.v3.UpstreamTlsContext
-        sni: 346929044083-bucket.s3.ap-northeast-1.amazonaws.com
+        sni: ${BUCKET_NAME}.s3.${AWS_REGION}.amazonaws.com

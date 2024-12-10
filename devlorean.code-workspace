@@ -4,8 +4,14 @@
 			"path": "."
 		},
 		{
+			"path": "devlorean-aws"
+		},
+		{
 			"path": "devlorean-sgw"
-		}
+		},
+		{
+			"path": "devlorean-web"
+		},
 	],
 	"settings": {
 		"files.exclude": {
