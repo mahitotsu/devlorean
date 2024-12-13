@@ -1,10 +1,10 @@
 FROM envoyproxy/envoy:v1.32.2
 
 RUN apt-get update && \
-    apt-get install -y gettext-base && \
+    apt-get install -y gettext-base curl && \
     rm -rf /var/lib/apt/lists/*
 
-ENV TINI_VERSION v0.19.0
+ENV TINI_VERSION=v0.19.0
 ADD https://github.com/krallin/tini/releases/download/${TINI_VERSION}/tini /usr/local/bin/tini
 RUN chmod +x /usr/local/bin/tini
 

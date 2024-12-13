@@ -7,3 +7,20 @@ services:
     environment:
       - BUCKET_NAME=hdkregionalwebstack-contentsbucket571b0902-nrdnfuucj9sj
       - AWS_REGION=ap-northeast-1
+      - WEB_HOST=web.service.local
+      # - LOG_LEVEL=debug
+    healthcheck:
+      test: ["CMD", "curl", "-s", "http://localhost:9901/ready"]
+      interval: 10s
+      timeout: 30s
+      retries: 5
+      start_period: 10s
+  web.service.local:
+    build:
+      context: ./devlorean-web
+    healthcheck:
+      test: ["CMD", "curl", "-s", "http://localhost:3000/health"]
+      interval: 10s
+      timeout: 30s
+      retries: 5
+      start_period: 10s

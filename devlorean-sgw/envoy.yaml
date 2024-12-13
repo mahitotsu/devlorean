@@ -1,3 +1,12 @@
+admin:
+  access_log:
+  - name: envoy.access_loggers.file
+    typed_config:
+      "@type": type.googleapis.com/envoy.extensions.access_loggers.file.v3.FileAccessLog
+      path: "/dev/null"
+  address:
+    socket_address: { address: 0.0.0.0, port_value: 9901 }
+
 layered_runtime:
   layers:
     - name: static_layer
@@ -24,10 +33,21 @@ static_resources:
               domains: ["*"]
               routes:
               - match:
+                  safe_regex: { regex: ".*\\.[^/]+$" }
+                route:
+                  cluster: contents_bucket
+                  host_rewrite_literal: ${BUCKET_NAME}
+                  retry_policy:
+                    retry_on: "reset,reset-before-request"
+                    num_retries: 5
+              - match:
                   prefix: "/"
                 route:
-                  host_rewrite_literal: ${BUCKET_NAME}
-                  cluster: contents_bucket
+                  cluster: web_server
+                  host_rewrite_literal: ${WEB_HOST}
+                  retry_policy:
+                    retry_on: "reset,reset-before-request"
+                    num_retries: 5
           http_filters:
           - name: envoy.filters.http.router
             typed_config:
@@ -35,7 +55,7 @@ static_resources:
 
   clusters:
   - name: contents_bucket
-    connect_timeout: 0.25s
+    connect_timeout: 1s
     type: LOGICAL_DNS
     dns_lookup_family: V4_ONLY
     lb_policy: ROUND_ROBIN
@@ -51,3 +71,36 @@ static_resources:
       typed_config:
         "@type": type.googleapis.com/envoy.extensions.transport_sockets.tls.v3.UpstreamTlsContext
         sni: ${BUCKET_NAME}.s3.${AWS_REGION}.amazonaws.com
+    health_checks:
+      - timeout: 1s
+        interval: 10s
+        unhealthy_threshold: 3
+        healthy_threshold: 2
+        http_health_check:
+          path: "/favicon.ico"
+  - name: web_server
+    connect_timeout: 1s
+    type: LOGICAL_DNS
+    dns_lookup_family: V4_ONLY
+    lb_policy: ROUND_ROBIN
+    load_assignment:
+      cluster_name: web_server
+      endpoints:
+        - lb_endpoints:
+          - endpoint:
+              address:
+                socket_address: { address: ${WEB_HOST}, port_value: ${WEB_PORT} }
+    health_checks:
+      - timeout: 1s
+        interval: 10s
+        unhealthy_threshold: 3
+        healthy_threshold: 2
+        http_health_check:
+          path: "/health"
+
+overload_manager:
+  resource_monitors:
+    - name: "envoy.resource_monitors.global_downstream_max_connections"
+      typed_config:
+        "@type": type.googleapis.com/envoy.extensions.resource_monitors.downstream_connections.v3.DownstreamConnectionsConfig
+        max_active_downstream_connections: 1000
