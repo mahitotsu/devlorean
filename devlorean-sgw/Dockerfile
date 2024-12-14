@@ -12,6 +12,6 @@ WORKDIR /tmp
 COPY ./entrypoint.sh .
 COPY ./envoy.yaml .
 
-EXPOSE 10000
+EXPOSE 80
 ENTRYPOINT ["tini", "--"]
 CMD ["./entrypoint.sh"]
