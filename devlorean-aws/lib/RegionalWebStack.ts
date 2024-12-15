@@ -1,13 +1,10 @@
 import { CfnOutput, Duration, RemovalPolicy, Stack, StackProps } from "aws-cdk-lib";
-import { GatewayVpcEndpointAwsService, IpAddresses, IpProtocol, Ipv6Addresses, Peer, Port, SecurityGroup, SubnetType, Vpc } from "aws-cdk-lib/aws-ec2";
-import { CfnService, Cluster, ContainerImage, FargateService, FargateTaskDefinition, HealthCheck, ICluster, LogDriver } from "aws-cdk-lib/aws-ecs";
+import { GatewayVpcEndpointAwsService, IpAddresses, IpProtocol, Ipv6Addresses, Port, SecurityGroup, SubnetType, Vpc } from "aws-cdk-lib/aws-ec2";
+import { CfnService, Cluster, ContainerImage, FargateService, FargateTaskDefinition } from "aws-cdk-lib/aws-ecs";
 import { NetworkListenerAction, NetworkLoadBalancer, NetworkTargetGroup, Protocol, TargetType } from "aws-cdk-lib/aws-elasticloadbalancingv2";
-import { Accelerator } from "aws-cdk-lib/aws-globalaccelerator";
-import { NetworkLoadBalancerEndpoint } from "aws-cdk-lib/aws-globalaccelerator-endpoints";
-import { Effect, PolicyStatement, StarPrincipal } from "aws-cdk-lib/aws-iam";
+import { Effect, PolicyStatement } from "aws-cdk-lib/aws-iam";
 import { BlockPublicAccess, Bucket } from "aws-cdk-lib/aws-s3";
 import { BucketDeployment, Source } from "aws-cdk-lib/aws-s3-deployment";
-import { Construct } from "constructs";
 
 interface ServiceConfig {
     name: string;
@@ -46,121 +43,90 @@ export class RegionalWebStack extends Stack {
             service: GatewayVpcEndpointAwsService.S3, subnets: [{ subnetType: SubnetType.PRIVATE_WITH_EGRESS }]
         });
 
-        const nlbSg = new SecurityGroup(vpc, 'LbSG', { vpc });
+        const servicePort = 10000;
+        const listenerPort = 80;
+
+        const taskDefinition = new FargateTaskDefinition(this, 'TaskDefinition', {
+            cpu: 1024, memoryLimitMiB: 2048,
+        });
+        taskDefinition.addContainer('sgw', {
+            essential: true,
+            image: ContainerImage.fromAsset(`${__dirname}/../../devlorean-sgw`),
+            portMappings: [{ containerPort: servicePort }],
+            environment: {
+                BUCKET_NAME: contentsBucket.bucketName,
+                WEB_HOST: 'localhost'
+            },
+            healthCheck: {
+                command: ['curl', '-f', 'http://localhost:9901/ready'],
+                startPeriod: Duration.seconds(10),
+                interval: Duration.seconds(5),
+                timeout: Duration.seconds(2),
+                retries: 5,
+            },
+        });
+        taskDefinition.addContainer('web', {
+            essential: true,
+            image: ContainerImage.fromAsset(`${__dirname}/../../devlorean-web`),
+            healthCheck: {
+                command: ['curl', '-f', 'http://localhost:3000/health'],
+                startPeriod: Duration.seconds(10),
+                interval: Duration.seconds(5),
+                timeout: Duration.seconds(2),
+                retries: 5,
+            },
+        });
+
+        const nlbSg = new SecurityGroup(this, 'NlbSg', { vpc });
+        const serviceSg = new SecurityGroup(this, 'serviceSg', { vpc });
+
+        const cluster = new Cluster(vpc, 'Cluster', { vpc });
+        const service = new FargateService(cluster, 'Service', {
+            taskDefinition, cluster,
+            vpcSubnets: { subnetType: SubnetType.PRIVATE_WITH_EGRESS }, securityGroups: [serviceSg],
+            assignPublicIp: false,
+            desiredCount: 1,
+        });
+        const cfnService = service.node.defaultChild as CfnService;
+        cfnService.deploymentConfiguration = { minimumHealthyPercent: 0, maximumPercent: 200 };
+
+        const targetGroup = new NetworkTargetGroup(service, 'TargetGroup', {
+            targetType: TargetType.IP,
+            port: servicePort, protocol: Protocol.TCP, vpc, preserveClientIp: false,
+            targets: [service],
+            healthCheck: {
+                healthyThresholdCount: 2, unhealthyThresholdCount: 2,
+                interval: Duration.seconds(5), timeout: Duration.seconds(2),
+            },
+            deregistrationDelay: Duration.seconds(0),
+        });
+
         const nlb = new NetworkLoadBalancer(vpc, 'LoadBalancer', {
             vpc, vpcSubnets: { subnetType: SubnetType.PUBLIC },
-            internetFacing: false, securityGroups: [nlbSg],
+            internetFacing: true,
+            securityGroups: [nlbSg],
+        });
+        nlb.addListener('Listener', {
+            port: listenerPort, protocol: Protocol.TCP,
+            defaultAction: NetworkListenerAction.forward([targetGroup]),
         });
 
-        const sgwServiceConfig = { name: 'Sgw', port: 80, securityGroup: new SecurityGroup(vpc, 'SgwSecurityGroup', { vpc }) };
-        const webServiceConfig = { name: 'Web', port: 3000, securityGroup: new SecurityGroup(vpc, 'WebSecurityGroup', { vpc }) };
-        const serviceCluster = new Cluster(vpc, 'ServiceCluster', { vpc, });
+        nlbSg.connections.allowFromAnyIpv4(Port.tcp(listenerPort));
+        serviceSg.connections.allowFrom(nlbSg, Port.tcp(servicePort));
 
-        const sgwService = this.createService({
-            cluster: serviceCluster, loadBalaner: nlb,
-            config: sgwServiceConfig,
-            image: ContainerImage.fromAsset(`${__dirname}/../../devlorean-sgw`),
-            cpu: 512, memoryLimitMiB: 1024,
-            environment: {
-                BUCKET_NAME: contentsBucket.bucketDomainName,
-                WEB_HOST: `${nlb.loadBalancerDnsName}`,
-                WEB_PORT: `${webServiceConfig.port}`,
-            },
-            healthCheck: {
-                command: ['CMD-SHELL', 'curl -sf http://localhost:9901/ready'],
-                interval: Duration.seconds(10), timeout: Duration.seconds(5),
-                retries: 5, startPeriod: Duration.seconds(10),
-            },
-            desiredCount: 1,
-        });
-        const webService = this.createService({
-            cluster: serviceCluster, loadBalaner: nlb,
-            config: webServiceConfig,
-            image: ContainerImage.fromAsset(`${__dirname}/../../devlorean-web`),
-            cpu: 1024, memoryLimitMiB: 2048,
-            healthCheck: {
-                command: ['CMD-SHELL', 'curl -sf http://localhost:3000/health'],
-                interval: Duration.seconds(10), timeout: Duration.seconds(5),
-                retries: 5, startPeriod: Duration.seconds(10),
-            },
-            desiredCount: 1,
-        });
-
-        nlb.connections.allowFrom(Peer.anyIpv4(), Port.tcp(sgwServiceConfig.port));
-        nlb.connections.allowFrom(Peer.ipv4(vpc.vpcCidrBlock), Port.tcp(webServiceConfig.port));
-
-        sgwServiceConfig.securityGroup.connections.allowFrom(nlb, Port.tcp(sgwServiceConfig.port));
-        webServiceConfig.securityGroup.connections.allowFrom(nlb, Port.tcp(webServiceConfig.port));
-
+        contentsBucket.grantRead(taskDefinition.taskRole);
         contentsBucket.addToResourcePolicy(new PolicyStatement({
             effect: Effect.ALLOW,
-            principals: [new StarPrincipal()],
+            principals: [taskDefinition.taskRole],
             actions: ['s3:GetObject'],
             resources: [contentsBucket.arnForObjects('*')],
-            conditions: { 'StringEquals': { 'aws:SourceVpce': s3Vpce.vpcEndpointId, } }
+            conditions: {
+                'StringEquals': {
+                    'aws:SourceVpce': s3Vpce.vpcEndpointId,
+                }
+            },
         }));
-        contentsBucket.grantRead(sgwService.taskDefinition.taskRole);
 
-        const accelerator = new Accelerator(this, 'Accelerator', {});
-        accelerator.addListener('Listener', {
-            portRanges: [{ fromPort: 80, toPort: 80, }, { fromPort: 443, toPort: 443, },],
-        }).addEndpointGroup('Endpoints', {
-            endpoints: [new NetworkLoadBalancerEndpoint(nlb, { preserveClientIp: true, })]
-        });
-
-        new CfnOutput(this, 'Endpoint', { value: `http://${accelerator.dnsName}` });
-    }
-
-    createService(args: {
-        cluster: ICluster;
-        loadBalaner: NetworkLoadBalancer;
-        config: ServiceConfig,
-        image: ContainerImage;
-        cpu: number;
-        memoryLimitMiB: number;
-        environment?: { [key: string]: string };
-        healthCheck?: HealthCheck;
-        desiredCount: number;
-    }) {
-        const scope = new Construct(args.cluster, args.config.name);
-
-        const taskDefinition = new FargateTaskDefinition(scope, 'TaskDefinition', {
-            cpu: args.cpu, memoryLimitMiB: args.memoryLimitMiB,
-        });
-        taskDefinition.addContainer('Container', {
-            image: args.image,
-            environment: args.environment,
-            portMappings: [{ containerPort: args.config.port }],
-            healthCheck: args.healthCheck,
-            logging: LogDriver.awsLogs({ streamPrefix: 'service' }),
-        });
-
-        const service = new FargateService(scope, 'Service', {
-            cluster: args.cluster, taskDefinition,
-            vpcSubnets: { subnetType: SubnetType.PRIVATE_WITH_EGRESS, },
-            securityGroups: [args.config.securityGroup],
-            desiredCount: args.desiredCount,
-            healthCheckGracePeriod: Duration.seconds(30),
-        });
-
-        const cfnService = service.node.defaultChild as CfnService;
-        cfnService.deploymentConfiguration = { maximumPercent: 200, minimumHealthyPercent: 0, };
-
-        const vpc = args.cluster.vpc;
-        args.loadBalaner.addListener(`Listener_${args.config.port}`, {
-            port: args.config.port, protocol: Protocol.TCP,
-            defaultAction: NetworkListenerAction.forward([new NetworkTargetGroup(scope, 'TargetGroup', {
-                vpc, port: args.config.port, targetType: TargetType.IP,
-                targets: [service],
-                preserveClientIp: false, crossZoneEnabled: true,
-                healthCheck: {
-                    healthyThresholdCount: 2, unhealthyThresholdCount: 2,
-                    interval: Duration.seconds(10), timeout: Duration.seconds(5),
-                },
-                deregistrationDelay: Duration.seconds(0),
-            })])
-        });
-
-        return service;
+        new CfnOutput(this, 'Endpoint', { value: `http://${nlb.loadBalancerDnsName}` });
     }
 }

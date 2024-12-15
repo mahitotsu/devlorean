@@ -17,9 +17,9 @@ layered_runtime:
 
 static_resources:
   listeners:
-  - name: listener_0
+  - name: listener
     address:
-      socket_address: { address: 0.0.0.0, port_value: 80 }
+      socket_address: { address: 0.0.0.0, port_value: 10000 }
     filter_chains:
     - filters:
       - name: envoy.filters.network.http_connection_manager
@@ -36,7 +36,7 @@ static_resources:
                   safe_regex: { regex: ".*\\.[^/]+$" }
                 route:
                   cluster: contents_bucket
-                  host_rewrite_literal: ${BUCKET_NAME}
+                  host_rewrite_literal: ${BUCKET_NAME}.s3.amazonaws.com
                   retry_policy:
                     retry_on: "reset,reset-before-request"
                     num_retries: 5
@@ -44,14 +44,14 @@ static_resources:
                   prefix: "/"
                 route:
                   cluster: web_server
-                  host_rewrite_literal: ${WEB_HOST}
-                  retry_policy:
-                    retry_on: "reset,reset-before-request"
-                    num_retries: 5
           http_filters:
           - name: envoy.filters.http.router
             typed_config:
               "@type": type.googleapis.com/envoy.extensions.filters.http.router.v3.Router
+          access_log:
+          - name: envoy.access_loggers.stdout
+            typed_config:
+              "@type": type.googleapis.com/envoy.extensions.access_loggers.stream.v3.StdoutAccessLog
 
   clusters:
   - name: contents_bucket
@@ -65,12 +65,12 @@ static_resources:
       - lb_endpoints:
         - endpoint:
             address:
-              socket_address: { address: ${BUCKET_NAME}.s3.${AWS_REGION}.amazonaws.com, port_value: 443 }
+              socket_address: { address: ${BUCKET_NAME}.s3.amazonaws.com, port_value: 443 }
     transport_socket:
       name: envoy.transport_sockets.tls
       typed_config:
         "@type": type.googleapis.com/envoy.extensions.transport_sockets.tls.v3.UpstreamTlsContext
-        sni: ${BUCKET_NAME}.s3.${AWS_REGION}.amazonaws.com
+        sni: ${BUCKET_NAME}.s3.amazonaws.com
   - name: web_server
     connect_timeout: 1s
     type: LOGICAL_DNS
@@ -82,7 +82,7 @@ static_resources:
         - lb_endpoints:
           - endpoint:
               address:
-                socket_address: { address: ${WEB_HOST}, port_value: ${WEB_PORT} }
+                socket_address: { address: ${WEB_HOST}, port_value: 3000 }
 
 overload_manager:
   resource_monitors:
