@@ -1,8 +1,9 @@
 import { CfnOutput, Duration, RemovalPolicy, Stack, StackProps } from "aws-cdk-lib";
-import { GatewayVpcEndpointAwsService, IpAddresses, IpProtocol, Ipv6Addresses, Port, SecurityGroup, SubnetType, Vpc } from "aws-cdk-lib/aws-ec2";
-import { CfnService, Cluster, ContainerImage, FargateService, FargateTaskDefinition } from "aws-cdk-lib/aws-ecs";
+import { GatewayVpcEndpointAwsService, IpAddresses, IpProtocol, Port, SecurityGroup, SubnetType, Vpc } from "aws-cdk-lib/aws-ec2";
+import { CfnService, Cluster, ContainerImage, FargateService, FargateTaskDefinition, LogDriver } from "aws-cdk-lib/aws-ecs";
 import { NetworkListenerAction, NetworkLoadBalancer, NetworkTargetGroup, Protocol, TargetType } from "aws-cdk-lib/aws-elasticloadbalancingv2";
-import { Effect, PolicyStatement } from "aws-cdk-lib/aws-iam";
+import { Effect, PolicyStatement, StarPrincipal } from "aws-cdk-lib/aws-iam";
+import { LogGroup, RetentionDays } from "aws-cdk-lib/aws-logs";
 import { BlockPublicAccess, Bucket } from "aws-cdk-lib/aws-s3";
 import { BucketDeployment, Source } from "aws-cdk-lib/aws-s3-deployment";
 
@@ -29,14 +30,14 @@ export class RegionalWebStack extends Stack {
             memoryLimit: 1024,
         });
 
+        const maxAzs = 2;
         const vpc = new Vpc(this, 'Vpc', {
-            ipProtocol: IpProtocol.DUAL_STACK,
-            ipAddresses: IpAddresses.cidr('10.0.0.0/16'), ipv6Addresses: Ipv6Addresses.amazonProvided(),
-            maxAzs: 2, createInternetGateway: true, natGateways: 1,
+            ipProtocol: IpProtocol.IPV4_ONLY, ipAddresses: IpAddresses.cidr('10.0.0.0/16'),
+            maxAzs, createInternetGateway: true, natGateways: maxAzs,
             subnetConfiguration: [
-                { name: 'public', subnetType: SubnetType.PUBLIC, cidrMask: 19, ipv6AssignAddressOnCreation: true, },
-                { name: 'private', subnetType: SubnetType.PRIVATE_WITH_EGRESS, cidrMask: 18, ipv6AssignAddressOnCreation: true },
-                { name: 'isolated', subnetType: SubnetType.PRIVATE_ISOLATED, cidrMask: 19, ipv6AssignAddressOnCreation: true },
+                { name: 'public', subnetType: SubnetType.PUBLIC, cidrMask: 19, },
+                { name: 'private', subnetType: SubnetType.PRIVATE_WITH_EGRESS, cidrMask: 18, },
+                { name: 'isolated', subnetType: SubnetType.PRIVATE_ISOLATED, cidrMask: 19, },
             ],
         });
         const s3Vpce = vpc.addGatewayEndpoint('S3Endpoint', {
@@ -64,6 +65,13 @@ export class RegionalWebStack extends Stack {
                 timeout: Duration.seconds(2),
                 retries: 5,
             },
+            logging: LogDriver.awsLogs({
+                streamPrefix: 'sgw',
+                logGroup: new LogGroup(this, 'SgwLogGroup', {
+                    removalPolicy: RemovalPolicy.DESTROY,
+                    retention: RetentionDays.ONE_DAY,
+                })
+            })
         });
         taskDefinition.addContainer('web', {
             essential: true,
@@ -77,8 +85,11 @@ export class RegionalWebStack extends Stack {
             },
         });
 
-        const nlbSg = new SecurityGroup(this, 'NlbSg', { vpc });
-        const serviceSg = new SecurityGroup(this, 'serviceSg', { vpc });
+        const nlbSg = new SecurityGroup(this, 'NlbSg', { vpc, allowAllOutbound: false });
+        const serviceSg = new SecurityGroup(this, 'serviceSg', { vpc, allowAllOutbound: false });
+        nlbSg.connections.allowFromAnyIpv4(Port.tcp(listenerPort));
+        serviceSg.connections.allowFrom(nlbSg, Port.tcp(servicePort));
+        serviceSg.connections.allowToAnyIpv4(Port.tcp(443));
 
         const cluster = new Cluster(vpc, 'Cluster', { vpc });
         const service = new FargateService(cluster, 'Service', {
@@ -111,13 +122,10 @@ export class RegionalWebStack extends Stack {
             defaultAction: NetworkListenerAction.forward([targetGroup]),
         });
 
-        nlbSg.connections.allowFromAnyIpv4(Port.tcp(listenerPort));
-        serviceSg.connections.allowFrom(nlbSg, Port.tcp(servicePort));
-
         contentsBucket.grantRead(taskDefinition.taskRole);
         contentsBucket.addToResourcePolicy(new PolicyStatement({
             effect: Effect.ALLOW,
-            principals: [taskDefinition.taskRole],
+            principals: [new StarPrincipal()],
             actions: ['s3:GetObject'],
             resources: [contentsBucket.arnForObjects('*')],
             conditions: {
