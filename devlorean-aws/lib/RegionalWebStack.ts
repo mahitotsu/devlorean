@@ -2,16 +2,11 @@ import { CfnOutput, Duration, RemovalPolicy, Stack, StackProps } from "aws-cdk-l
 import { GatewayVpcEndpointAwsService, IpAddresses, IpProtocol, Port, SecurityGroup, SubnetType, Vpc } from "aws-cdk-lib/aws-ec2";
 import { CfnService, Cluster, ContainerImage, FargateService, FargateTaskDefinition, LogDriver } from "aws-cdk-lib/aws-ecs";
 import { NetworkListenerAction, NetworkLoadBalancer, NetworkTargetGroup, Protocol, TargetType } from "aws-cdk-lib/aws-elasticloadbalancingv2";
-import { Effect, PolicyStatement, StarPrincipal } from "aws-cdk-lib/aws-iam";
+import { Effect, PolicyStatement } from "aws-cdk-lib/aws-iam";
 import { LogGroup, RetentionDays } from "aws-cdk-lib/aws-logs";
 import { BlockPublicAccess, Bucket } from "aws-cdk-lib/aws-s3";
 import { BucketDeployment, Source } from "aws-cdk-lib/aws-s3-deployment";
-
-interface ServiceConfig {
-    name: string;
-    port: number;
-    securityGroup: SecurityGroup;
-}
+import { Construct } from "constructs";
 
 export class RegionalWebStack extends Stack {
     constructor(scope: any, id: string, props: StackProps) {
@@ -44,10 +39,12 @@ export class RegionalWebStack extends Stack {
             service: GatewayVpcEndpointAwsService.S3, subnets: [{ subnetType: SubnetType.PRIVATE_WITH_EGRESS }]
         });
 
-        const servicePort = 10000;
+        const servicePort = 80;
         const listenerPort = 80;
+        const serviceNamespace = 'service.local';
+        const web = new Construct(this, 'Web');
 
-        const taskDefinition = new FargateTaskDefinition(this, 'TaskDefinition', {
+        const taskDefinition = new FargateTaskDefinition(web, 'TaskDefinition', {
             cpu: 1024, memoryLimitMiB: 2048,
         });
         taskDefinition.addContainer('sgw', {
@@ -56,10 +53,11 @@ export class RegionalWebStack extends Stack {
             portMappings: [{ containerPort: servicePort }],
             environment: {
                 BUCKET_NAME: contentsBucket.bucketName,
-                WEB_HOST: 'localhost'
+                WEB_HOST: 'localhost',
+                WEB_PORT: '3000'
             },
             healthCheck: {
-                command: ['curl', '-f', 'http://localhost:9901/ready'],
+                command: ['curl', '-f', `http://localhost:${servicePort}/health`],
                 startPeriod: Duration.seconds(10),
                 interval: Duration.seconds(5),
                 timeout: Duration.seconds(2),
@@ -67,7 +65,18 @@ export class RegionalWebStack extends Stack {
             },
             logging: LogDriver.awsLogs({
                 streamPrefix: 'sgw',
-                logGroup: new LogGroup(this, 'SgwLogGroup', {
+                logGroup: new LogGroup(web, 'SgwLogGroup', {
+                    removalPolicy: RemovalPolicy.DESTROY,
+                    retention: RetentionDays.ONE_DAY,
+                })
+            })
+        });
+        taskDefinition.addContainer('sig', {
+            essential: false,
+            image: ContainerImage.fromAsset(`${__dirname}/../../devlorean-sig`),
+            logging: LogDriver.awsLogs({
+                streamPrefix: 'sig',
+                logGroup: new LogGroup(web, 'SigLogGroup', {
                     removalPolicy: RemovalPolicy.DESTROY,
                     retention: RetentionDays.ONE_DAY,
                 })
@@ -83,6 +92,13 @@ export class RegionalWebStack extends Stack {
                 timeout: Duration.seconds(2),
                 retries: 5,
             },
+            logging: LogDriver.awsLogs({
+                streamPrefix: 'web',
+                logGroup: new LogGroup(web, 'WebLogGroup', {
+                    removalPolicy: RemovalPolicy.DESTROY,
+                    retention: RetentionDays.ONE_DAY,
+                })
+            })
         });
 
         const nlbSg = new SecurityGroup(this, 'NlbSg', { vpc, allowAllOutbound: false });
@@ -91,20 +107,37 @@ export class RegionalWebStack extends Stack {
         serviceSg.connections.allowFrom(nlbSg, Port.tcp(servicePort));
         serviceSg.connections.allowToAnyIpv4(Port.tcp(443));
 
-        const cluster = new Cluster(vpc, 'Cluster', { vpc });
-        const service = new FargateService(cluster, 'Service', {
+        const cluster = new Cluster(vpc, 'Cluster', {
+            vpc,
+            defaultCloudMapNamespace: { name: serviceNamespace, useForServiceConnect: true, },
+            enableFargateCapacityProviders: true,
+        });
+        cluster.addDefaultCapacityProviderStrategy([
+            { capacityProvider: 'FARGATE_SPOT', weight: 1 },
+        ]);
+
+        const webService = new FargateService(web, 'Service', {
             taskDefinition, cluster,
             vpcSubnets: { subnetType: SubnetType.PRIVATE_WITH_EGRESS }, securityGroups: [serviceSg],
             assignPublicIp: false,
             desiredCount: 1,
         });
-        const cfnService = service.node.defaultChild as CfnService;
-        cfnService.deploymentConfiguration = { minimumHealthyPercent: 0, maximumPercent: 200 };
+        webService.enableServiceConnect({
+            logDriver: LogDriver.awsLogs({
+                streamPrefix: 'trf',
+                logGroup: new LogGroup(web, 'TrfLogGroup', {
+                    removalPolicy: RemovalPolicy.DESTROY,
+                    retention: RetentionDays.ONE_DAY,
+                })
+            }),
+        });
+        const cfnWebService = webService.node.defaultChild as CfnService;
+        cfnWebService.deploymentConfiguration = { minimumHealthyPercent: 0, maximumPercent: 200 };
 
-        const targetGroup = new NetworkTargetGroup(service, 'TargetGroup', {
+        const targetGroup = new NetworkTargetGroup(webService, 'TargetGroup', {
             targetType: TargetType.IP,
             port: servicePort, protocol: Protocol.TCP, vpc, preserveClientIp: false,
-            targets: [service],
+            targets: [webService],
             healthCheck: {
                 healthyThresholdCount: 2, unhealthyThresholdCount: 2,
                 interval: Duration.seconds(5), timeout: Duration.seconds(2),
@@ -125,7 +158,7 @@ export class RegionalWebStack extends Stack {
         contentsBucket.grantRead(taskDefinition.taskRole);
         contentsBucket.addToResourcePolicy(new PolicyStatement({
             effect: Effect.ALLOW,
-            principals: [new StarPrincipal()],
+            principals: [taskDefinition.taskRole],
             actions: ['s3:GetObject'],
             resources: [contentsBucket.arnForObjects('*')],
             conditions: {

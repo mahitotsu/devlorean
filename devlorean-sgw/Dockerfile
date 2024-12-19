@@ -1,17 +1,7 @@
-FROM envoyproxy/envoy:v1.32.2
+FROM public.ecr.aws/nginx/nginx:mainline
 
 RUN apt-get update && \
     apt-get install -y gettext-base curl && \
     rm -rf /var/lib/apt/lists/*
 
-ENV TINI_VERSION=v0.19.0
-ADD https://github.com/krallin/tini/releases/download/${TINI_VERSION}/tini /usr/local/bin/tini
-RUN chmod +x /usr/local/bin/tini
-
-WORKDIR /tmp
-COPY ./entrypoint.sh .
-COPY ./envoy.yaml .
-
-EXPOSE 80
-ENTRYPOINT ["tini", "--"]
-CMD ["./entrypoint.sh"]
+COPY ./default.conf /etc/nginx/templates/default.conf.template
