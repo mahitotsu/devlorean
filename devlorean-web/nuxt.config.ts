@@ -7,5 +7,8 @@ export default defineNuxtConfig({
     static: false,
     serveStatic: false,
     preset: 'node-server',
+  },
+  runtimeConfig: {
+    apiBase: 'http://api.base',
   }
 })

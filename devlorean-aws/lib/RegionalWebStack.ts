@@ -42,12 +42,13 @@ export class RegionalWebStack extends Stack {
         const servicePort = 80;
         const listenerPort = 80;
         const serviceNamespace = 'service.local';
-        const web = new Construct(this, 'Web');
+        const apiName = 'api';
 
-        const taskDefinition = new FargateTaskDefinition(web, 'TaskDefinition', {
+        const web = new Construct(this, 'Web');
+        const webTaskDef = new FargateTaskDefinition(web, 'TaskDefinition', {
             cpu: 1024, memoryLimitMiB: 2048,
         });
-        taskDefinition.addContainer('sgw', {
+        webTaskDef.addContainer('sgw', {
             essential: true,
             image: ContainerImage.fromAsset(`${__dirname}/../../devlorean-sgw`),
             portMappings: [{ containerPort: servicePort }],
@@ -71,7 +72,7 @@ export class RegionalWebStack extends Stack {
                 })
             })
         });
-        taskDefinition.addContainer('sig', {
+        webTaskDef.addContainer('sig', {
             essential: false,
             image: ContainerImage.fromAsset(`${__dirname}/../../devlorean-sig`),
             logging: LogDriver.awsLogs({
@@ -82,9 +83,12 @@ export class RegionalWebStack extends Stack {
                 })
             })
         });
-        taskDefinition.addContainer('web', {
+        webTaskDef.addContainer('web', {
             essential: true,
             image: ContainerImage.fromAsset(`${__dirname}/../../devlorean-web`),
+            environment: {
+                NUXT_API_BASE: `http://${apiName}.${serviceNamespace}:${servicePort}`,
+            },
             healthCheck: {
                 command: ['curl', '-f', 'http://localhost:3000/health'],
                 startPeriod: Duration.seconds(10),
@@ -101,11 +105,53 @@ export class RegionalWebStack extends Stack {
             })
         });
 
+        const api = new Construct(this, 'Api');
+        const apiTaskDef = new FargateTaskDefinition(api, 'TaskDefinition', {
+            cpu: 2048, memoryLimitMiB: 4096,
+        });
+        apiTaskDef.addContainer('api', {
+            image: ContainerImage.fromAsset(`${__dirname}/../../devlorean-api`),
+            portMappings: [{ containerPort: servicePort, name: apiName }],
+            environment: {
+                SERVER_PORT: servicePort.toString(),
+            },
+            healthCheck: {
+                command: ['curl', '-f', `http://localhost:${servicePort}/actuator/health`],
+                startPeriod: Duration.seconds(10),
+                interval: Duration.seconds(5),
+                timeout: Duration.seconds(2),
+                retries: 5,
+            },
+            logging: LogDriver.awsLogs({
+                streamPrefix: 'api',
+                logGroup: new LogGroup(api, 'ApiLogGroup', {
+                    removalPolicy: RemovalPolicy.DESTROY,
+                    retention: RetentionDays.ONE_DAY,
+                })
+            })
+        });
+
         const nlbSg = new SecurityGroup(this, 'NlbSg', { vpc, allowAllOutbound: false });
-        const serviceSg = new SecurityGroup(this, 'serviceSg', { vpc, allowAllOutbound: false });
+        const webSg = new SecurityGroup(this, 'WebSg', { vpc, allowAllOutbound: false });
+        const apiSg = new SecurityGroup(this, 'ApiSg', { vpc, allowAllOutbound: false });
         nlbSg.connections.allowFromAnyIpv4(Port.tcp(listenerPort));
-        serviceSg.connections.allowFrom(nlbSg, Port.tcp(servicePort));
-        serviceSg.connections.allowToAnyIpv4(Port.tcp(443));
+        webSg.connections.allowFrom(nlbSg, Port.tcp(servicePort));
+        webSg.connections.allowToAnyIpv4(Port.tcp(443));
+        apiSg.connections.allowFrom(webSg, Port.tcp(servicePort));
+        apiSg.connections.allowToAnyIpv4(Port.tcp(443));
+
+        contentsBucket.grantRead(webTaskDef.taskRole);
+        contentsBucket.addToResourcePolicy(new PolicyStatement({
+            effect: Effect.ALLOW,
+            principals: [webTaskDef.taskRole],
+            actions: ['s3:GetObject'],
+            resources: [contentsBucket.arnForObjects('*')],
+            conditions: {
+                'StringEquals': {
+                    'aws:SourceVpce': s3Vpce.vpcEndpointId,
+                }
+            },
+        }));
 
         const cluster = new Cluster(vpc, 'Cluster', {
             vpc,
@@ -117,8 +163,8 @@ export class RegionalWebStack extends Stack {
         ]);
 
         const webService = new FargateService(web, 'Service', {
-            taskDefinition, cluster,
-            vpcSubnets: { subnetType: SubnetType.PRIVATE_WITH_EGRESS }, securityGroups: [serviceSg],
+            taskDefinition: webTaskDef, cluster,
+            vpcSubnets: { subnetType: SubnetType.PRIVATE_WITH_EGRESS }, securityGroups: [webSg],
             assignPublicIp: false,
             desiredCount: 1,
         });
@@ -134,16 +180,25 @@ export class RegionalWebStack extends Stack {
         const cfnWebService = webService.node.defaultChild as CfnService;
         cfnWebService.deploymentConfiguration = { minimumHealthyPercent: 0, maximumPercent: 200 };
 
-        const targetGroup = new NetworkTargetGroup(webService, 'TargetGroup', {
-            targetType: TargetType.IP,
-            port: servicePort, protocol: Protocol.TCP, vpc, preserveClientIp: false,
-            targets: [webService],
-            healthCheck: {
-                healthyThresholdCount: 2, unhealthyThresholdCount: 2,
-                interval: Duration.seconds(5), timeout: Duration.seconds(2),
-            },
-            deregistrationDelay: Duration.seconds(0),
+        const apiService = new FargateService(api, 'Service', {
+            taskDefinition: apiTaskDef, cluster,
+            vpcSubnets: { subnetType: SubnetType.PRIVATE_WITH_EGRESS }, securityGroups: [apiSg],
+            assignPublicIp: false,
+            desiredCount: 1,
         });
+        apiService.enableServiceConnect({
+            services: [{ portMappingName: apiName }],
+            logDriver: LogDriver.awsLogs({
+                streamPrefix: 'trf',
+                logGroup: new LogGroup(api, 'TrfLogGroup', {
+                    removalPolicy: RemovalPolicy.DESTROY,
+                    retention: RetentionDays.ONE_DAY,
+                })
+            }),
+        });
+        const cfnApiService = apiService.node.defaultChild as CfnService;
+        cfnApiService.deploymentConfiguration = { minimumHealthyPercent: 0, maximumPercent: 200 };
+        webService.node.addDependency(apiService);
 
         const nlb = new NetworkLoadBalancer(vpc, 'LoadBalancer', {
             vpc, vpcSubnets: { subnetType: SubnetType.PUBLIC },
@@ -152,21 +207,19 @@ export class RegionalWebStack extends Stack {
         });
         nlb.addListener('Listener', {
             port: listenerPort, protocol: Protocol.TCP,
-            defaultAction: NetworkListenerAction.forward([targetGroup]),
+            defaultAction: NetworkListenerAction.forward([
+                new NetworkTargetGroup(webService, 'TargetGroup', {
+                    targetType: TargetType.IP,
+                    port: servicePort, protocol: Protocol.TCP, vpc, preserveClientIp: false,
+                    targets: [webService],
+                    healthCheck: {
+                        healthyThresholdCount: 2, unhealthyThresholdCount: 2,
+                        interval: Duration.seconds(5), timeout: Duration.seconds(2),
+                    },
+                    deregistrationDelay: Duration.seconds(0),
+                })
+            ]),
         });
-
-        contentsBucket.grantRead(taskDefinition.taskRole);
-        contentsBucket.addToResourcePolicy(new PolicyStatement({
-            effect: Effect.ALLOW,
-            principals: [taskDefinition.taskRole],
-            actions: ['s3:GetObject'],
-            resources: [contentsBucket.arnForObjects('*')],
-            conditions: {
-                'StringEquals': {
-                    'aws:SourceVpce': s3Vpce.vpcEndpointId,
-                }
-            },
-        }));
 
         new CfnOutput(this, 'Endpoint', { value: `http://${nlb.loadBalancerDnsName}` });
     }

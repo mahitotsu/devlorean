@@ -19,8 +19,6 @@ services:
   sig.service.local:
     build:
       context: ./devlorean-sig
-    ports:
-      - 8080:8080
     healthcheck:
       test: ["CMD", "nc -nz http://localhost:8080/"]
       interval: 10s
@@ -30,8 +28,21 @@ services:
   web.service.local:
     build:
       context: ./devlorean-web
+    environment:
+      - NUXT_API_BASE=http://api.service.local
     healthcheck:
       test: ["CMD", "curl", "-sf", "http://localhost:3000/health"]
+      interval: 10s
+      timeout: 30s
+      retries: 5
+      start_period: 10s
+  api.service.local:
+    build:
+      context: ./devlorean-api
+    environment:
+      - SERVER_PORT=80
+    healthcheck:
+      test: ["CMD", "curl", "-sf", "http://localhost:8080/actuator/health"]
       interval: 10s
       timeout: 30s
       retries: 5
